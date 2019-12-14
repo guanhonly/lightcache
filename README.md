@@ -38,6 +38,6 @@ value, hit := cache.Get("key")
 cache.Delet("key")
 ```
 
-### Limitations
+## Limitations
 * Keys must be string and values must be bytes. Other types must marshaled to bytes to store in cache.
 * Don't support callback functions for expiration, which many other caches did. This is for light weight.

@@ -271,6 +271,9 @@ func (c *cache) Delete(key string) error {
 
 func (c *cache) Close() error {
 	close(c.close)
+	if c.logHandler != nil {
+		c.logHandler.Close()
+	}
 	return nil
 }
 
