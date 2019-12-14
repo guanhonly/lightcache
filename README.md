@@ -1,6 +1,6 @@
 # lightCache
 A lightweight but full-featured Go key-value local memory cache.  
-Some code and data management inspired by [bigcache](https://github.com/allegro/bigcache), consistence inspired by [Redis AOF](https://redis.io/topics/persistence).  
+Data management and some code are inspired by [bigcache](https://github.com/allegro/bigcache), consistence is inspired by [Redis AOF](https://redis.io/topics/persistence).  
 It's an initial version so far, some features may not meet expectations.
 ## Features(Expected)
 * Lightweight.
