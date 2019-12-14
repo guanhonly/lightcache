@@ -32,7 +32,7 @@ type cache struct {
 	cleanInterval     time.Duration
 	capacity          int64
 	maxMemory         uintptr
-	lock              *sync.RWMutex
+	lock              sync.RWMutex
 	enablePersistence bool
 	logHandler        *os.File
 }
