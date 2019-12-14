@@ -53,5 +53,3 @@ func TestWriteAndGetOnCache(t *testing.T) {
 		})
 	}
 }
-
-
