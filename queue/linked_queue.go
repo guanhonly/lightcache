@@ -106,6 +106,9 @@ func (e *Element) IsValid() bool {
 }
 
 func (e *Element) IsExpired(currentTimestamp int64) bool {
+	if e.ttl <= 0 {
+		return false
+	}
 	if currentTimestamp-e.ts > e.ttl {
 		return true
 	}

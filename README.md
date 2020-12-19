@@ -1,6 +1,6 @@
-# lightCache
+# lightcache
 A lightweight but full-featured Go key-value local memory cache.  
-Data management and some code are inspired by [bigcache](https://github.com/allegro/bigcache), consistence is inspired by [Redis AOF](https://redis.io/topics/persistence).  
+Data management and some code are inspired by [bigcache](https://github.com/allegro/bigcache), persistence is inspired by [Redis AOF](https://redis.io/topics/persistence).  
 It's an initial version so far, some features may not meet expectations.
 ## Features(Expected)
 * Lightweight.
@@ -12,7 +12,8 @@ It's an initial version so far, some features may not meet expectations.
 * Customizable maximum memory usage.
 * Simple API.
 * Simple source code.
-* Data persistence.
+* Data persistence by WAL(write ahead log).
+* Compress WAL(developing...)
 
 ## QuickStart
 ### Installation
@@ -22,8 +23,7 @@ go get github.com/guanhonly/lightCache
 ### Usage
 ```go
 // create lightCache with default config, which
-// uses global ttl as 1 hour and does not enable
-// consistence.
+// has permanent ttl and persistence is not enabled.
 cache := DefaultCacheBuilder().Build()
 
 // set key value without customized ttl(use global ttl).
@@ -42,3 +42,4 @@ cache.Delet("key")
 ## Limitations
 * Keys must be string and values must be bytes. Other types must marshaled to bytes to store in cache.
 * Don't support callback functions for expiration, which many other caches did. This is for light weight.
+* Atomicity and transaction are not supported.

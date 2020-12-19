@@ -5,8 +5,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/user"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -22,6 +20,8 @@ const (
 	CommandSet                  = "SET"
 	CommandSetWithTTL           = "SETWITHTTL"
 	CommandDelete               = "DEL"
+	CmdSeparator                = ' '
+	DefaultLogChanSize          = 1 << 10
 )
 
 type cache struct {
@@ -35,6 +35,7 @@ type cache struct {
 	lock              sync.RWMutex
 	enablePersistence bool
 	logHandler        *os.File
+	logChan           chan []byte
 }
 
 type cacheBuilder struct {
@@ -44,6 +45,8 @@ type cacheBuilder struct {
 	maxMemory         uintptr
 	cleanInterval     time.Duration
 	enablePersistence bool
+	logFileName       *string
+	strongPersistence bool
 }
 
 func NewCacheBuilder() *cacheBuilder {
@@ -83,6 +86,10 @@ func (c *cacheBuilder) WithPersistence(persistence bool) {
 	c.enablePersistence = persistence
 }
 
+func (c *cacheBuilder) WithLogFileName(fileName string) {
+	c.logFileName = &fileName
+}
+
 func DefaultCacheBuilder() *cacheBuilder {
 	return &cacheBuilder{
 		shardsNum:         DefaultShardNum,
@@ -110,31 +117,28 @@ func (c *cacheBuilder) Build() *cache {
 		cache.shards[i] = initShard(c.globalTTL)
 	}
 	go cleaner(cache)
-	go memoryMaster(cache)
 	if c.enablePersistence {
-		cache.initWAL()
+		var walFileName string
+		if c.logFileName == nil {
+			walFileName = "WAL.log"
+		} else {
+			walFileName = *c.logFileName
+		}
+		cache.initWAL(walFileName)
+		if c.strongPersistence {
+			cache.logChan = make(chan []byte) // If strong persistence is enabled, use no buffer channel to ensure it.
+		} else {
+			cache.logChan = make(chan []byte, DefaultLogChanSize)
+		}
 	}
 	return cache
 }
 
-func (c *cache) initWAL() {
-	usr, err := user.Current()
-	if err != nil {
-		log.Println(err)
-		c.enablePersistence = false
-		return
-	}
-	walFileName := "/WAL.lc"
-	walDir := filepath.Join(usr.HomeDir, "/lightCache")
-	walPath := filepath.Join(walDir, walFileName)
-	if !pathExists(walDir) {
-		_ = os.MkdirAll(walDir, 0777)
+func (c *cache) initWAL(walPath string) {
+	if !pathExists(walPath) {
 		_, _ = os.Create(walPath)
-	} else {
-		if !pathExists(walPath) {
-			_, _ = os.Create(walPath)
-		}
 	}
+
 	fp, err := os.OpenFile(walPath, os.O_RDWR|os.O_APPEND, 0777)
 	if err != nil {
 		log.Println(err)
@@ -157,10 +161,11 @@ func (c *cache) initWAL() {
 }
 
 func (c *cache) executeOneCommand(cmd string) {
-	args := strings.Split(cmd, "\t")
+	args := strings.Split(cmd, string(CmdSeparator))
 	if len(args) < 2 {
 		return
 	}
+	currTs := time.Now().Unix()
 	switch args[0] {
 	case CommandSet:
 		if len(args) < 3 {
@@ -175,11 +180,13 @@ func (c *cache) executeOneCommand(cmd string) {
 		}
 		key := args[1]
 		value := []byte(args[2])
-		ttl, err := strconv.ParseInt(args[3], 10, 64)
+		expiredAt, err := strconv.ParseInt(args[3], 10, 64)
 		if err != nil {
 			return
 		}
-		_ = c.SetWithTTL(key, value, ttl)
+		if expiredAt > currTs {
+			_ = c.SetWithTTL(key, value, expiredAt-currTs)
+		}
 	case CommandDelete:
 		if len(args) < 2 {
 			return
@@ -200,7 +207,9 @@ func cleaner(c *cache) {
 	for {
 		select {
 		case t := <-ticker.C:
-			c.cleanUp(t.Unix())
+			if int64(c.size()) > c.capacity || c.memUsage() > c.maxMemory {
+				c.cleanUp(t.Unix())
+			}
 		case <-c.close:
 			return
 		}
@@ -213,44 +222,33 @@ func (c *cache) cleanUp(currentTimestamp int64) {
 	}
 }
 
-func memoryMaster(c *cache) {
-	if c.maxMemory > 0 {
-		ticker := time.NewTicker(c.cleanInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				go c.manageSizeAndMemory()
-			case <-c.close:
-				return
-			}
-		}
-	}
-}
-
 func (c *cache) Set(key string, value []byte) error {
 	if c.enablePersistence {
-		go c.writeToWAL([]byte(CommandSet), value)
+		c.appendWAL([]byte(CommandSet), value)
 	}
 	hashKey := hash(key) % c.mask
 	return c.shards[hashKey].set(key, value)
 }
 
-func (c *cache) writeToWAL(args ...[]byte) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	var command []byte
+func (c *cache) appendWAL(args ...[]byte) {
+	var cmd []byte
 	for _, arg := range args {
-		command = append(command, arg...)
-		command = append(command, '\t')
+		cmd = append(cmd, arg...)
+		cmd = append(cmd, CmdSeparator)
 	}
-	command = append(command, '\n')
-	_, _ = c.logHandler.Write(command)
+	c.logChan <- cmd
+}
+
+func (c *cache) handleWAL() {
+	for cmd := range c.logChan {
+		c.logHandler.Write(cmd)
+		c.logHandler.Write([]byte{'\n'})
+	}
 }
 
 func (c *cache) SetWithTTL(key string, value []byte, ttl int64) error {
 	if c.enablePersistence {
-		go c.writeToWAL([]byte(CommandSetWithTTL), []byte(key), value, Int64ToBytes(ttl))
+		c.appendWAL([]byte(CommandSetWithTTL), []byte(key), value, Int64ToBytes(ttl+time.Now().Unix()))
 	}
 	hashKey := hash(key) % c.mask
 	return c.shards[hashKey].setWithTTL(key, value, ttl)
@@ -263,7 +261,7 @@ func (c *cache) Get(key string) (value []byte, hit bool) {
 
 func (c *cache) Delete(key string) error {
 	if c.enablePersistence {
-		go c.writeToWAL([]byte(CommandDelete), []byte(key))
+		c.appendWAL([]byte(CommandDelete), []byte(key))
 	}
 	hashKey := hash(key) % c.mask
 	return c.shards[hashKey].delete(key)
@@ -291,46 +289,4 @@ func (c *cache) size() int {
 		size += shard.size()
 	}
 	return size
-}
-
-func (c *cache) manageSizeAndMemory() {
-	if c.maxMemory > 0 {
-		retryTimes := 0
-		for (int64(c.size()) > c.capacity || c.memUsage() > c.maxMemory) && retryTimes < MaxRetries {
-			c.removeOldestOne()
-			retryTimes++
-		}
-	}
-}
-
-func (c *cache) removeOldestOne() {
-	allOldestTimestamp := make([]tuple, c.mask)
-	for i, shard := range c.shards {
-		allOldestTimestamp[i] = tuple{
-			ts:    shard.oldestTime(),
-			index: i,
-			key:   shard.oldestKey(),
-		}
-	}
-	oldestIndex, oldestKey := findOldestIndexAndKey(allOldestTimestamp)
-	if c.enablePersistence {
-		go c.writeToWAL([]byte(CommandDelete), []byte(oldestKey))
-	}
-	c.shards[oldestIndex].removeOldestOne()
-}
-
-func findOldestIndexAndKey(all []tuple) (int, string) {
-	res := all[0]
-	for _, i := range all {
-		if i.ts < res.ts {
-			res = i
-		}
-	}
-	return res.index, res.key
-}
-
-type tuple struct {
-	ts    int64
-	index int
-	key   string
 }

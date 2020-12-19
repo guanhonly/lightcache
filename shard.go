@@ -1,10 +1,11 @@
 package lightCache
 
 import (
-	"./queue"
+	"github.com/guanhonly/lightCache/queue"
 	"os"
 	"reflect"
 	"sync"
+	"time"
 )
 
 type shard struct {
@@ -78,7 +79,13 @@ func (s *shard) get(key string) ([]byte, bool) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	if element, exist := s.hash[key]; exist {
-		return element.Value(), true
+		nowTime := time.Now().Unix()
+		if s.ttl <= 0 || !element.IsExpired(nowTime) {
+			return element.Value(), true
+		}
+		if element.IsExpired(nowTime) {
+			s.delete(key)
+		}
 	}
 	return nil, false
 }
