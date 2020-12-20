@@ -13,7 +13,7 @@ It's an initial version so far, some features may not meet expectations.
 * Simple API.
 * Simple source code.
 * Data persistence by WAL(write ahead log).
-* Compress WAL(developing...)
+* Compressible WAL(developing...)
 
 ## QuickStart
 ### Installation
@@ -40,6 +40,6 @@ cache.Delet("key")
 ```
 
 ## Limitations
-* Keys must be string and values must be bytes. Other types must marshaled to bytes to store in cache.
-* Don't support callback functions for expiration, which many other caches did. This is for light weight.
+* Keys must be string and values must be bytes. Other types must be marshaled to bytes to store in cache.
+* Callback function for expiration is not supported, which many other caches did. This is for light weight.
 * Atomicity and transaction are not supported.
